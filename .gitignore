@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.local
+.env.*.local
+coverage
+dist
+.vite
+npm-debug.log*
+.DS_Store
+postgres-data
+redis-data
+
+frontend/tsconfig.tsbuildinfo

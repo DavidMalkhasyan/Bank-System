@@ -1,0 +1,9 @@
+{
+  "chat.tools.terminal.autoApprove": {
+    "npm install": true,
+    "npm --workspace backend": true,
+    "docker compose": true,
+    "docker exec": true,
+    "true": true
+  }
+}

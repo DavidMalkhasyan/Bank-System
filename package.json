@@ -1,0 +1,17 @@
+{
+  "name": "banking-system",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "dev:backend": "npm --workspace backend run dev",
+    "build": "npm --workspace frontend run build && npm --workspace backend run build",
+    "test": "npm --workspace backend run test -- --runInBand",
+    "lint": "npm --workspace frontend run lint && npm --workspace backend run lint",
+    "typecheck": "npm --workspace frontend run typecheck && npm --workspace backend run typecheck"
+  }
+}
