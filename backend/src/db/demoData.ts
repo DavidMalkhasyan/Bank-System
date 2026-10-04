@@ -262,9 +262,22 @@ export async function seedDemoData({ reset = false } = {}) {
         await insertAudit(client, users.get(key)!, 'LOGIN', 'user', users.get(key)!, { ip: '203.0.113.' + random.int(2, 250) }, at);
       }
     }
+
+    await client.query(
+      `
+        INSERT INTO app_state (key, value, updated_at) VALUES ('demo_seeded_at', NOW()::text, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+      `,
+    );
   });
 
   return true;
+}
+
+/** When the demo data was last seeded or reset, or null if that was never recorded. */
+export async function lastDemoSeedAt() {
+  const [row] = await query<{ updated_at: Date }>(`SELECT updated_at FROM app_state WHERE key = 'demo_seeded_at'`);
+  return row?.updated_at ?? null;
 }
 
 async function insertAudit(

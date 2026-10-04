@@ -83,10 +83,11 @@ sequenceDiagram
 **Analytics in SQL.** The cash flow chart uses one `generate_series` query for daily income and expense. Internal moves between a customer's own accounts are excluded. The balance history is rebuilt backwards from today's balance ([`transactionRepository.cashflow`](backend/src/repositories/transactionRepository.ts)).
 
 **Operational details.**
-- Versioned migrations run on startup under a Postgres advisory lock.
+- Versioned migrations run on startup, each in its own transaction under a transaction-scoped advisory lock, so they are safe with several instances and behind connection poolers.
 - Validation errors from Zod become readable `400` responses with per-field errors.
 - Redis caches account reads (cache-aside) and is optional: the app runs fine without it.
-- The server shuts down gracefully, and `/health` checks the database.
+- The server shuts down gracefully. `/health` is a cheap liveness check that never touches the database; `/health/ready` also checks the database.
+- An optional demo reset (`DEMO_RESET_HOURS`) stores its last run in the database, so it keeps its schedule even on hosts that put idle servers to sleep.
 
 ## Architecture
 
@@ -192,8 +193,19 @@ npm run seed:reset   # wipe the database and load the demo data again
 
 The root [`Dockerfile`](Dockerfile) builds a single production image: the API also serves the compiled React app, so one service and one database are all you need.
 
-- **Render:** [`render.yaml`](render.yaml) is a blueprint for a free web service and a free PostgreSQL database. Push to GitHub, choose *New → Blueprint* in Render, and pick this repository. JWT secrets are generated for you, and the demo data resets every 24 hours.
-- **Anywhere else:** run the image with `DATABASE_URL` and `JWT_ACCESS_SECRET` set. Add `DATABASE_SSL=true` for hosted databases such as Neon or Supabase. See [`.env.example`](.env.example) for every option.
+### Free: Render + Neon
+
+1. Create a free [Neon](https://neon.com) project in the **AWS Europe Central 1 (Frankfurt)** region and copy its connection string.
+2. In [Render](https://render.com), choose **New → Blueprint**, connect this repository, and paste the Neon connection string as `DATABASE_URL`. [`render.yaml`](render.yaml) sets up the rest: a free Docker web service in Frankfurt, a generated JWT secret, and demo data that resets every 24 hours.
+3. On first start the API creates the tables and loads the demo data.
+
+Render's own free databases are deleted 30 days after creation, which is why the database lives on Neon.
+
+Free Render web services sleep after 15 minutes without visitors, and the next visit takes about a minute. To avoid that, point a free uptime monitor (for example [UptimeRobot](https://uptimerobot.com)) at `https://<your-app>.onrender.com/health` every 5 minutes. That route doesn't query the database, so Neon can still sleep when idle and stays within its free compute hours.
+
+### Anywhere else
+
+Run the image with `DATABASE_URL` and `JWT_ACCESS_SECRET` set. Add `DATABASE_SSL=true` if your database requires TLS and its connection string doesn't already ask for it (Neon's does). See [`.env.example`](.env.example) for every option.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint, type checks, the integration tests against PostgreSQL, and the production build on every push.
 

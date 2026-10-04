@@ -1,4 +1,4 @@
-import { pool } from './index.js';
+import { withTransaction } from './index.js';
 
 interface Migration {
   id: string;
@@ -103,44 +103,46 @@ const migrations: Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
     `,
   },
+  {
+    id: '003_app_state',
+    sql: `
+      -- Small key/value store for app-level facts, e.g. when the demo data was last reset.
+      CREATE TABLE IF NOT EXISTS app_state (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `,
+  },
 ];
 
 const MIGRATION_LOCK_ID = 727_274;
 
-/** Applies pending migrations in order. Safe to call on every startup. */
+/**
+ * Applies pending migrations in order. Safe to call on every startup, also
+ * from several instances at once: each migration runs in its own transaction
+ * under a transaction-scoped advisory lock. Unlike a session lock, that also
+ * works through connection poolers such as PgBouncer or Neon's pooled endpoint.
+ */
 export async function runMigrations({ silent = false } = {}) {
-  const client = await pool.connect();
+  for (const migration of migrations) {
+    const applied = await withTransaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock($1)', [MIGRATION_LOCK_ID]);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          id VARCHAR(100) PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
 
-  try {
-    // Several app instances may start at once; only one applies migrations.
-    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_ID]);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        id VARCHAR(100) PRIMARY KEY,
-        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+      const existing = await client.query('SELECT 1 FROM schema_migrations WHERE id = $1', [migration.id]);
+      if (existing.rowCount) return false;
 
-    const applied = new Set(
-      (await client.query<{ id: string }>('SELECT id FROM schema_migrations')).rows.map((row) => row.id),
-    );
+      await client.query(migration.sql);
+      await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [migration.id]);
+      return true;
+    });
 
-    for (const migration of migrations) {
-      if (applied.has(migration.id)) continue;
-
-      try {
-        await client.query('BEGIN');
-        await client.query(migration.sql);
-        await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [migration.id]);
-        await client.query('COMMIT');
-        if (!silent) console.log(`Applied migration ${migration.id}`);
-      } catch (error) {
-        await client.query('ROLLBACK').catch(() => undefined);
-        throw error;
-      }
-    }
-  } finally {
-    await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_ID]).catch(() => undefined);
-    client.release();
+    if (applied && !silent) console.log(`Applied migration ${migration.id}`);
   }
 }
