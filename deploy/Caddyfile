@@ -1,0 +1,8 @@
+# HTTPS for the site address in .env (for example ledgerly.duckdns.org).
+# Caddy gets the certificate on its own and redirects plain HTTP to HTTPS.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	# Browsers remember to use HTTPS for this site for a year.
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy app:4000
+}

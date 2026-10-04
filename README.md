@@ -193,7 +193,18 @@ npm run seed:reset   # wipe the database and load the demo data again
 
 The root [`Dockerfile`](Dockerfile) builds a single production image: the API also serves the compiled React app, so one service and one database are all you need.
 
-### Free: Render + Neon
+### Always on, free: Oracle Cloud
+
+An Oracle Cloud *Always Free* Ampere server (1 OCPU, 6 GB) runs the database, the app and Caddy (automatic HTTPS) from [`compose.prod.yaml`](compose.prod.yaml). After creating the server, one command installs everything:
+
+```bash
+git clone https://github.com/DavidMalkhasyan/Bank-System.git ledgerly && cd ledgerly
+bash deploy/install.sh ledgerly.duckdns.org
+```
+
+Step-by-step guide: [`docs/deploy-oracle.md`](docs/deploy-oracle.md). The same steps work on any Ubuntu server (Hetzner, DigitalOcean...).
+
+### Free, sleeps when idle: Render + Neon
 
 1. Create a free [Neon](https://neon.com) project in the **AWS Europe Central 1 (Frankfurt)** region and copy its connection string.
 2. In [Render](https://render.com), choose **New → Blueprint**, connect this repository, and paste the Neon connection string as `DATABASE_URL`. [`render.yaml`](render.yaml) sets up the rest: a free Docker web service in Frankfurt, a generated JWT secret, and demo data that resets every 24 hours.
