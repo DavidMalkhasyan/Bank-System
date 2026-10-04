@@ -6,30 +6,45 @@ on:
   pull_request:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: banking_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d banking_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Backend typecheck
-        run: npm --workspace backend run typecheck
+      - name: Lint
+        run: npm run lint
 
-      - name: Frontend typecheck
-        run: npm --workspace frontend run typecheck
+      - name: Typecheck
+        run: npm run typecheck
 
-      - name: Backend build
-        run: npm --workspace backend run build
+      - name: Backend tests
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/banking_test
 
-      - name: Frontend build
-        run: npm --workspace frontend run build
+      - name: Build
+        run: npm run build

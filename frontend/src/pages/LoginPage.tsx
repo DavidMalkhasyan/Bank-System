@@ -1,68 +1,105 @@
-import { FormEvent, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Eye, EyeOff, Lock, Mail, ShieldCheck, UserRound } from 'lucide-react';
 
-import { api } from '../services/api';
-import { setCredentials } from '../store/slices/authSlice';
-import { useAppDispatch } from '../store/hooks';
+import { Logo } from '../components/Logo';
+import { Alert, Button, Field, Input } from '../components/ui';
+import { errorMessage } from '../lib/api';
+import { login } from '../lib/queries';
+import { AuthLayout } from './AuthLayout';
+
+export const DEMO_ACCOUNTS = {
+  customer: { email: 'alex@example.com', password: 'password123' },
+  admin: { email: 'admin@example.com', password: 'password123' },
+};
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('admin@example.com');
-  const [password, setPassword] = useState('password123');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const dispatch = useAppDispatch();
+  const location = useLocation();
+  const redirectTo = (location.state as { from?: string } | null)?.from ?? '/app';
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [pending, setPending] = useState<'form' | 'customer' | 'admin' | null>(null);
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    setLoading(true);
+  const signIn = async (credentials: { email: string; password: string }, source: 'form' | 'customer' | 'admin') => {
+    setPending(source);
     setError('');
-
     try {
-      const data = (await api.request<{ user: { id: string; email: string; role: 'CUSTOMER' | 'ADMIN'; }; accessToken: string; refreshToken: string }>('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      })) as {
-        user: { id: string; email: string; role: 'CUSTOMER' | 'ADMIN'; };
-        accessToken: string;
-        refreshToken: string;
-      };
-
-      dispatch(setCredentials({
-        token: data.accessToken,
-        refreshToken: data.refreshToken,
-        user: data.user,
-      }));
-
-      navigate('/dashboard');
+      await login(credentials.email, credentials.password);
+      navigate(source === 'admin' ? '/app/admin' : redirectTo, { replace: true });
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      setError(errorMessage(err));
+      setPending(null);
     }
   };
 
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void signIn({ email, password }, 'form');
+  };
+
   return (
-    <div className="auth-shell">
-      <form className="card auth-card" onSubmit={handleSubmit} autoComplete="off">
-        <h1>Banking System</h1>
-        <h2>Login</h2>
-        {error && <div className="error-box">{error}</div>}
-        <label>
-          Email
-          <input name="email" autoComplete="off" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input name="password" autoComplete="new-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        <button type="submit" disabled={loading}>
-          {loading ? 'Signing in...' : 'Login'}
-        </button>
-        <p>
-          Need an account? <Link to="/register">Register</Link>
+    <AuthLayout>
+      <form className="auth-form" onSubmit={submit} noValidate>
+        <span className="topbar-logo">
+          <Logo />
+        </span>
+        <div>
+          <h1>Welcome back</h1>
+          <p className="muted" style={{ marginTop: 6 }}>Sign in to manage your accounts.</p>
+        </div>
+
+        <div className="stack-sm">
+          <span className="field-label">Explore with a demo account</span>
+          <div className="demo-buttons">
+            <button type="button" className="demo-button" onClick={() => signIn(DEMO_ACCOUNTS.customer, 'customer')} disabled={pending !== null}>
+              {pending === 'customer' ? <span className="spinner" /> : <UserRound size={20} />}
+              <span>
+                <strong>Customer</strong>
+                <span>Alex Carter</span>
+              </span>
+            </button>
+            <button type="button" className="demo-button" onClick={() => signIn(DEMO_ACCOUNTS.admin, 'admin')} disabled={pending !== null}>
+              {pending === 'admin' ? <span className="spinner" /> : <ShieldCheck size={20} />}
+              <span>
+                <strong>Admin</strong>
+                <span>Back office</span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className="auth-divider">or sign in with email</div>
+
+        {error && <Alert>{error}</Alert>}
+
+        <Field label="Email" htmlFor="email">
+          <Input id="email" type="email" autoComplete="email" icon={<Mail />} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
+        </Field>
+        <Field label="Password" htmlFor="password">
+          <Input
+            id="password"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="current-password"
+            icon={<Lock />}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="••••••••"
+            required
+            action={
+              <Button variant="ghost" size="sm" icon={showPassword ? <EyeOff /> : <Eye />} onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} />
+            }
+          />
+        </Field>
+        <Button type="submit" size="lg" block loading={pending === 'form'} disabled={!email || !password || pending !== null}>
+          Sign in
+        </Button>
+        <p className="muted" style={{ textAlign: 'center' }}>
+          New to Ledgerly? <Link to="/register">Create an account</Link>
         </p>
       </form>
-    </div>
+    </AuthLayout>
   );
 }

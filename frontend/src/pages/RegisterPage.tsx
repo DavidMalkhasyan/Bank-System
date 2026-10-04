@@ -1,64 +1,88 @@
-import { FormEvent, useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { Gift, Lock, Mail, UserRound } from 'lucide-react';
 
-import { api } from '../services/api';
-import { setCredentials } from '../store/slices/authSlice';
-import { useAppDispatch } from '../store/hooks';
+import { Logo } from '../components/Logo';
+import { useToast } from '../components/Toast';
+import { Alert, Button, Field, Input } from '../components/ui';
+import { ApiError, errorMessage } from '../lib/api';
+import { register } from '../lib/queries';
+import { AuthLayout } from './AuthLayout';
+
+export function passwordStrength(password: string) {
+  if (!password) return 0;
+  let score = 0;
+  if (password.length >= 8) score += 1;
+  if (password.length >= 12) score += 1;
+  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score += 1;
+  if (/\d/.test(password) && /[^A-Za-z0-9]/.test(password)) score += 1;
+  return Math.max(1, Math.min(4, score));
+}
+
+const STRENGTH_LABELS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 
 export default function RegisterPage() {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-  const dispatch = useAppDispatch();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const [pending, setPending] = useState(false);
+  const strength = passwordStrength(password);
 
-  const handleSubmit = async (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setLoading(true);
+    setPending(true);
     setError('');
-
+    setFieldErrors({});
     try {
-      const data = await api.request<{ user: { id: string; email: string; role: 'CUSTOMER' | 'ADMIN'; }; accessToken: string; refreshToken: string }>('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      });
-
-      dispatch(setCredentials({
-        token: data.accessToken,
-        refreshToken: data.refreshToken,
-        user: data.user,
-      }));
-
-      navigate('/dashboard');
+      const session = await register({ fullName, email, password });
+      toast.success(`Welcome, ${session.user.fullName.split(' ')[0]}!`, 'Your checking account is open with a $1,000 welcome bonus.');
+      navigate('/app', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      setError(errorMessage(err));
+      if (err instanceof ApiError) setFieldErrors(err.fieldErrors);
+      setPending(false);
     }
   };
 
   return (
-    <div className="auth-shell">
-      <form className="card auth-card" onSubmit={handleSubmit} autoComplete="off">
-        <h1>Banking System</h1>
-        <h2>Register</h2>
-        {error && <div className="error-box">{error}</div>}
-        <label>
-          Email
-          <input name="email" autoComplete="off" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input name="password" autoComplete="new-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-        </label>
-        <button type="submit" disabled={loading}>
-          {loading ? 'Creating account...' : 'Create account'}
-        </button>
-        <p>
-          Already have an account? <Link to="/login">Login</Link>
+    <AuthLayout>
+      <form className="auth-form" onSubmit={submit} noValidate>
+        <span className="topbar-logo">
+          <Logo />
+        </span>
+        <div>
+          <h1>Create your account</h1>
+          <p className="muted" style={{ marginTop: 6 }}>It takes less than a minute.</p>
+        </div>
+        <Alert tone="success">
+          <span className="row" style={{ gap: 6 }}>
+            <Gift size={16} /> New accounts get <strong>$1,000</strong> of demo money to try transfers.
+          </span>
+        </Alert>
+        {error && <Alert>{error}</Alert>}
+        <Field label="Full name" htmlFor="fullName" error={fieldErrors.fullName?.[0]}>
+          <Input id="fullName" autoComplete="name" icon={<UserRound />} value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Jane Doe" required />
+        </Field>
+        <Field label="Email" htmlFor="email" error={fieldErrors.email?.[0]}>
+          <Input id="email" type="email" autoComplete="email" icon={<Mail />} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
+        </Field>
+        <Field label="Password" htmlFor="password" error={fieldErrors.password?.[0]} hint={password ? `${STRENGTH_LABELS[strength]} password` : 'At least 8 characters'}>
+          <Input id="password" type="password" autoComplete="new-password" icon={<Lock />} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" required minLength={8} />
+          <div className="strength" data-level={strength} aria-hidden>
+            <i /><i /><i /><i />
+          </div>
+        </Field>
+        <Button type="submit" size="lg" block loading={pending} disabled={!fullName || !email || password.length < 8}>
+          Create account
+        </Button>
+        <p className="muted" style={{ textAlign: 'center' }}>
+          Already have an account? <Link to="/login">Sign in</Link>
         </p>
       </form>
-    </div>
+    </AuthLayout>
   );
 }

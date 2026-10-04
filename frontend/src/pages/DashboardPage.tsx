@@ -1,202 +1,227 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ArrowDownLeft, ArrowRight, ArrowUpRight, Eye, EyeOff, Minus, Plus, Send, Wallet } from 'lucide-react';
 
-import Sidebar from '../components/Sidebar';
-import { api } from '../services/api';
-import { useAppSelector } from '../store/hooks';
-import { formatCurrency, formatDateTime, formatTransactionType, maskAccountId } from '../utils/format';
+import { AccountCard } from '../components/AccountCard';
+import { useActions } from '../components/AppLayout';
+import { CashflowChart } from '../components/CashflowChart';
+import { TransactionList } from '../components/TransactionList';
+import { Alert, Card, CardHeader, EmptyState, Segmented, Skeleton } from '../components/ui';
+import { errorMessage } from '../lib/api';
+import { formatMoney, greeting, totalsByCurrency } from '../lib/format';
+import { useAccounts, useCashflow, useTransactions } from '../lib/queries';
+import type { Currency } from '../lib/types';
+import { useAppSelector } from '../store';
 
-interface AccountRecord {
-  id: string;
-  user_id: string;
-  currency: string;
-  balance: string;
-  status: string;
-  created_at: string;
-}
+const HIDE_KEY = 'ledgerly_hide_balance';
 
-interface TransactionRecord {
-  id: string;
-  user_id: string;
-  source_account_id: string | null;
-  destination_account_id: string | null;
-  amount: string;
-  currency: string;
-  type: 'DEPOSIT' | 'WITHDRAWAL' | 'TRANSFER';
-  status: string;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
+function BalanceAmount({ value, currency, hidden }: { value: number; currency: Currency; hidden: boolean }) {
+  if (hidden) return <div className="balance-amount">••••••</div>;
+  const formatted = formatMoney(value, currency);
+  const dot = formatted.lastIndexOf('.');
+  return (
+    <div className="balance-amount">
+      {dot > 0 ? formatted.slice(0, dot) : formatted}
+      {dot > 0 && <span className="cents">{formatted.slice(dot)}</span>}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
   const user = useAppSelector((state) => state.auth.user);
-  const [accounts, setAccounts] = useState<AccountRecord[]>([]);
-  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const actions = useActions();
+  const accounts = useAccounts();
+  const recent = useTransactions({ page: 1, pageSize: 8 });
+  const [chartMode, setChartMode] = useState<'balance' | 'flow'>('balance');
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(HIDE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
 
+  const totals = useMemo(() => totalsByCurrency(accounts.data ?? []), [accounts.data]);
+  const currencies = useMemo(() => [...totals.keys()], [totals]);
+  const [currency, setCurrency] = useState<Currency | undefined>();
   useEffect(() => {
-    const loadData = async () => {
+    if (!currency || !currencies.includes(currency)) setCurrency(currencies.includes('USD') ? 'USD' : currencies[0]);
+  }, [currencies, currency]);
+
+  const cashflow = useCashflow(currency, 30);
+  const activeAccounts = (accounts.data ?? []).filter((account) => account.status !== 'CLOSED');
+
+  const toggleHidden = () => {
+    setHidden((value) => {
       try {
-        setLoading(true);
-        const [accountsResponse, transactionsResponse] = await Promise.all([
-          api.request<AccountRecord[]>('/accounts'),
-          api.request<TransactionRecord[]>('/transactions?page=1&pageSize=8'),
-        ]);
-
-        setAccounts(accountsResponse ?? []);
-        setTransactions(transactionsResponse ?? []);
-        setError('');
-      } catch (err) {
-        setError((err as Error).message || 'Unable to load dashboard data.');
-      } finally {
-        setLoading(false);
+        localStorage.setItem(HIDE_KEY, value ? '0' : '1');
+      } catch {
+        // Preference just won't persist.
       }
-    };
+      return !value;
+    });
+  };
 
-    loadData();
-  }, []);
-
-  const totalBalance = useMemo(
-    () => accounts.reduce((sum, account) => sum + Number.parseFloat(account.balance || '0'), 0),
-    [accounts],
-  );
-
-  const summaryByCurrency = useMemo(() => {
-    return Object.entries(
-      accounts.reduce<Record<string, number>>((acc, account) => {
-        acc[account.currency] = (acc[account.currency] ?? 0) + Number.parseFloat(account.balance || '0');
-        return acc;
-      }, {}),
-    ).map(([currency, value]) => ({ currency, value }));
-  }, [accounts]);
-
-  const recentTransactions = transactions.slice(0, 6);
+  const firstName = user?.fullName.split(' ')[0] ?? 'there';
 
   return (
-    <div className="page-shell">
-      <Sidebar />
-      <main className="content-panel">
-        <div className="card hero-card">
-          <p className="eyebrow">Overview</p>
-          <h1>Welcome, {user?.email?.split('@')[0] ?? 'Customer'}</h1>
-          <p>Track your balances, payments, and account activity across your connected banking profile.</p>
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">
+            {greeting()}, {firstName}
+          </h1>
+          <p className="page-subtitle">Here’s what’s happening with your money.</p>
+        </div>
+      </div>
+
+      {accounts.isError && <Alert>{errorMessage(accounts.error)}</Alert>}
+
+      <div className="grid grid-main" style={{ marginBottom: 20 }}>
+        <div className="balance-hero">
+          <div className="row-between">
+            <div className="balance-label">
+              Total balance
+              <button type="button" className="eye-toggle" onClick={toggleHidden} aria-label={hidden ? 'Show balances' : 'Hide balances'}>
+                {hidden ? <Eye /> : <EyeOff />}
+              </button>
+            </div>
+            {currencies.length > 1 && (
+              <div className="currency-tabs" role="group" aria-label="Currency">
+                {currencies.map((code) => (
+                  <button key={code} type="button" aria-pressed={code === currency} onClick={() => setCurrency(code)}>
+                    {code}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {accounts.isLoading || !currency ? (
+            <div style={{ margin: '14px 0 24px' }}>
+              <Skeleton width={220} height={40} />
+            </div>
+          ) : (
+            <>
+              <BalanceAmount value={totals.get(currency) ?? 0} currency={currency} hidden={hidden} />
+              <p className="balance-meta">
+                Across {activeAccounts.filter((account) => account.currency === currency).length} {currency} account
+                {activeAccounts.filter((account) => account.currency === currency).length === 1 ? '' : 's'}
+                {cashflow.data && !hidden && ` · ${Number(cashflow.data.totals.net) >= 0 ? '+' : ''}${formatMoney(cashflow.data.totals.net, cashflow.data.currency)} net over 30 days`}
+              </p>
+            </>
+          )}
+          <div className="balance-flows">
+            <div className="balance-flow">
+              <ArrowDownLeft />
+              <div>
+                <div className="flow-label">Money in · 30d</div>
+                <div className="flow-value">{cashflow.data && !hidden ? formatMoney(cashflow.data.totals.income, cashflow.data.currency) : '—'}</div>
+              </div>
+            </div>
+            <div className="balance-flow">
+              <ArrowUpRight />
+              <div>
+                <div className="flow-label">Money out · 30d</div>
+                <div className="flow-value">{cashflow.data && !hidden ? formatMoney(cashflow.data.totals.expense, cashflow.data.currency) : '—'}</div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {error && <div className="error-box">{error}</div>}
-
-        {loading ? (
-          <div className="card info-card">Loading dashboard data...</div>
-        ) : (
-          <>
-            <div className="stats-grid">
-              <div className="card stat-card">
-                <span>Total balance</span>
-                <strong>{formatCurrency(totalBalance, 'USD')}</strong>
-              </div>
-              <div className="card stat-card">
-                <span>Accounts</span>
-                <strong>{accounts.length}</strong>
-              </div>
-              <div className="card stat-card">
-                <span>Recent activity</span>
-                <strong>{transactions.length}</strong>
-              </div>
+        <Card className="card-pad">
+          <div className="stack" style={{ height: '100%' }}>
+            <div>
+              <h2 className="card-title">Quick actions</h2>
+              <p className="card-subtitle">Move money in a couple of taps.</p>
             </div>
-
-            <div className="card section-card">
-              <div className="section-header">
-                <h2>Accounts</h2>
-                <Link to="/accounts">View all</Link>
-              </div>
-              <div className="account-list compact">
-                {accounts.length === 0 ? (
-                  <p className="empty-text">You do not have any accounts yet.</p>
-                ) : (
-                  accounts.map((account) => (
-                    <Link key={account.id} to={`/accounts/${account.id}`} className="account-summary">
-                      <div>
-                        <strong>{account.currency} account</strong>
-                        <span>{maskAccountId(account.id)}</span>
-                      </div>
-                      <div className="account-summary-meta">
-                        <span>{account.status}</span>
-                        <strong>{formatCurrency(account.balance, account.currency)}</strong>
-                      </div>
-                    </Link>
-                  ))
-                )}
-              </div>
+            <div className="quick-actions" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+              <Link to="/app/transfer" className="quick-action">
+                <span className="quick-action-icon"><Send /></span>
+                Send
+              </Link>
+              <button type="button" className="quick-action" onClick={() => actions.openDeposit()}>
+                <span className="quick-action-icon green"><Plus /></span>
+                Deposit
+              </button>
+              <button type="button" className="quick-action" onClick={() => actions.openWithdraw()}>
+                <span className="quick-action-icon red"><Minus /></span>
+                Withdraw
+              </button>
+              <button type="button" className="quick-action" onClick={actions.openNewAccount}>
+                <span className="quick-action-icon amber"><Wallet /></span>
+                New account
+              </button>
             </div>
+          </div>
+        </Card>
+      </div>
 
-            <div className="two-col">
-              <div className="card section-card">
-                <div className="section-header">
-                  <h2>Quick actions</h2>
-                </div>
-                <div className="button-row">
-                  <Link to="/transfer" className="primary-button">Transfer</Link>
-                  <Link to="/accounts" className="secondary-button">Deposit</Link>
-                  <Link to="/accounts" className="secondary-button">Withdraw</Link>
-                </div>
-              </div>
-
-              <div className="card section-card">
-                <div className="section-header">
-                  <h2>Balance by currency</h2>
-                </div>
-                <div className="stack-list">
-                  {summaryByCurrency.length === 0 ? (
-                    <p className="empty-text">No balances yet.</p>
-                  ) : (
-                    summaryByCurrency.map(({ currency, value }) => (
-                      <div key={currency} className="list-row">
-                        <span>{currency}</span>
-                        <strong>{formatCurrency(value, currency)}</strong>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+      <Card>
+        <CardHeader
+          title="Cash flow"
+          subtitle={currency ? `Last 30 days · ${currency}` : 'Last 30 days'}
+          action={
+            <Segmented
+              label="Chart type"
+              value={chartMode}
+              onChange={setChartMode}
+              options={[
+                { value: 'balance', label: 'Balance' },
+                { value: 'flow', label: 'In & out' },
+              ]}
+            />
+          }
+        />
+        <div className="card-body">
+          {chartMode === 'flow' && (
+            <div className="legend" style={{ marginBottom: 8 }}>
+              <span><i style={{ background: 'var(--chart-income)' }} /> Money in</span>
+              <span><i style={{ background: 'var(--chart-expense)' }} /> Money out</span>
             </div>
+          )}
+          <CashflowChart data={cashflow.data} mode={chartMode} loading={cashflow.isLoading || !currency} />
+        </div>
+      </Card>
 
-            <div className="card section-card">
-              <div className="section-header">
-                <h2>Recent transactions</h2>
-                <Link to="/transactions">View all</Link>
-              </div>
-              {recentTransactions.length === 0 ? (
-                <p className="empty-text">No transactions yet.</p>
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Details</th>
-                        <th>Date</th>
-                        <th>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recentTransactions.map((transaction) => (
-                        <tr key={transaction.id}>
-                          <td>{formatTransactionType(transaction.type)}</td>
-                          <td>{transaction.metadata && typeof transaction.metadata.description === 'string' ? transaction.metadata.description : 'Transaction'}</td>
-                          <td>{formatDateTime(transaction.created_at)}</td>
-                          <td className={Number.parseFloat(transaction.amount) >= 0 ? 'positive' : 'negative'}>
-                            {formatCurrency(transaction.amount, transaction.currency)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </main>
-    </div>
+      <div className="grid grid-main" style={{ marginTop: 20 }}>
+        <Card>
+          <CardHeader
+            title="Recent activity"
+            action={
+              <Link to="/app/transactions" className="card-link">
+                View all <ArrowRight />
+              </Link>
+            }
+          />
+          <div style={{ padding: '6px 0 10px' }}>
+            {recent.data?.items.length === 0 ? (
+              <EmptyState title="No activity yet">Deposits, withdrawals and transfers will show up here.</EmptyState>
+            ) : (
+              <TransactionList transactions={recent.data?.items} loading={recent.isLoading} />
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Your accounts"
+            action={
+              <Link to="/app/accounts" className="card-link">
+                Manage <ArrowRight />
+              </Link>
+            }
+          />
+          <div className="card-body stack">
+            {accounts.isLoading
+              ? Array.from({ length: 2 }, (_, index) => <Skeleton key={index} height={190} radius={20} />)
+              : activeAccounts.slice(0, 3).map((account) => <AccountCard key={account.id} account={account} hideBalance={hidden} />)}
+            <button type="button" className="add-card" style={{ minHeight: 110 }} onClick={actions.openNewAccount}>
+              <Plus />
+              Open another account
+            </button>
+          </div>
+        </Card>
+      </div>
+    </>
   );
 }

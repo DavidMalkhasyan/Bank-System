@@ -1,54 +1,45 @@
-version: '3.9'
-
+# Local development: PostgreSQL, Redis, the API (hot reload) and the Vite dev server.
+# Run `docker compose up --build`, then open http://localhost:5173
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: banking-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-banking}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: banking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - '15432:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d banking']
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    container_name: banking-redis
     restart: unless-stopped
     ports:
       - '6380:6379'
-    volumes:
-      - redis-data:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: banking-backend
+    build: ./backend
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: ${PORT:-4000}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/banking}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change-me-access-secret}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-secret}
-      ACCESS_TOKEN_EXPIRES_IN: ${ACCESS_TOKEN_EXPIRES_IN:-15m}
-      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-7d}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/banking
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-access-secret}
+      CORS_ORIGIN: http://localhost:5173
+      SEED_DEMO_DATA: 'true'
     ports:
       - '4000:4000'
     depends_on:
@@ -61,13 +52,10 @@ services:
       - /app/node_modules
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: banking-frontend
+    build: ./frontend
     restart: unless-stopped
     environment:
-      VITE_API_URL: http://localhost:4000
+      VITE_PROXY_TARGET: http://backend:4000
     ports:
       - '5173:5173'
     depends_on:
@@ -78,4 +66,3 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:

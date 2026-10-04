@@ -1,53 +1,64 @@
 import { createClient } from 'redis';
 import { env } from '../config/env.js';
 
-const client = createClient({ url: env.redisUrl });
+let client: ReturnType<typeof createClient> | null = null;
 
-let connected = false;
-
-client.on('error', () => {
-  // swallow errors, app should continue without redis
-});
-
+/** Connects once. The app keeps working without Redis; cache calls become no-ops. */
 export async function connectRedis() {
-  if (connected) return;
+  if (!env.redisUrl || client) return;
+
+  client = createClient({
+    url: env.redisUrl,
+    socket: {
+      connectTimeout: 2_000,
+      reconnectStrategy: (retries) => (retries > 10 ? false : Math.min(retries * 500, 5_000)),
+    },
+  });
+  client.on('error', () => {
+    // Errors are expected when Redis is down; reads fall back to PostgreSQL.
+  });
+
   try {
     await client.connect();
-    connected = true;
+    console.log('Redis connected');
   } catch {
-    // ignore; operations will handle missing connection
+    console.warn('Redis unavailable, continuing without cache');
   }
 }
 
-export async function getJson<T = unknown>(key: string): Promise<T | null> {
+const isReady = () => client?.isReady === true;
+
+export async function cacheGet<T>(key: string): Promise<T | null> {
+  if (!isReady()) return null;
   try {
-    const raw = await client.get(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
+    const raw = await client!.get(key);
+    return raw ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
   }
 }
 
-export async function setJson(key: string, value: unknown, ttlSeconds = 60) {
+export async function cacheSet(key: string, value: unknown, ttlSeconds = 60) {
+  if (!isReady()) return;
   try {
-    const raw = JSON.stringify(value);
-    if (ttlSeconds > 0) {
-      await client.setEx(key, ttlSeconds, raw);
-    } else {
-      await client.set(key, raw);
-    }
+    await client!.setEx(key, ttlSeconds, JSON.stringify(value));
   } catch {
-    // ignore
+    // Cache writes are best effort.
   }
 }
 
-export async function del(key: string) {
+export async function cacheDel(...keys: string[]) {
+  if (!isReady() || keys.length === 0) return;
   try {
-    await client.del(key);
+    await client!.del(keys);
   } catch {
-    // ignore
+    // Cache invalidation is best effort; entries also expire by TTL.
   }
 }
 
-export default client;
+export async function disconnectRedis() {
+  if (client?.isOpen) {
+    await client.quit().catch(() => undefined);
+  }
+  client = null;
+}

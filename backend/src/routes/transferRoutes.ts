@@ -1,45 +1,37 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { requireAuth } from '../middleware/auth.js';
-import * as accountServiceModule from '../services/accountService.js';
-
-const accountService = (accountServiceModule as any).accountService ?? (accountServiceModule as any).default ?? accountServiceModule;
-import type { AuthenticatedRequest } from '../middleware/auth.js';
+import { asyncHandler, currentUser, requireAuth } from '../middleware/auth.js';
+import { accountService } from '../services/accountService.js';
+import { amountField, descriptionField, uuidParam } from './schemas.js';
 
 const router = Router();
 
-const transferSchema = z.object({
-  sourceAccountId: z.string().uuid(),
-  destinationAccountId: z.string().uuid(),
-  amount: z.string().min(1),
-  description: z.string().max(255).optional(),
-});
+const transferSchema = z
+  .object({
+    sourceAccountId: uuidParam,
+    destinationAccountId: uuidParam.optional(),
+    destinationAccountNumber: z
+      .string()
+      .transform((value) => value.replace(/\D/g, ''))
+      .pipe(z.string().length(16, 'Account numbers have 16 digits'))
+      .optional(),
+    amount: amountField,
+    description: descriptionField,
+  })
+  .refine((value) => value.destinationAccountId || value.destinationAccountNumber, {
+    message: 'Choose a destination account',
+    path: ['destinationAccountId'],
+  });
 
 router.use(requireAuth);
 
-router.post('/', async (req: AuthenticatedRequest, res, next) => {
-  try {
+router.post(
+  '/',
+  asyncHandler(async (req, res) => {
     const payload = transferSchema.parse(req.body);
-    const user = req.user;
-
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
-
-    const result = await accountService.transfer({
-      sourceAccountId: payload.sourceAccountId,
-      destinationAccountId: payload.destinationAccountId,
-      amountRaw: payload.amount,
-      requesterId: user.id,
-      requesterRole: user.role,
-      description: payload.description,
-    });
-
-    return res.status(201).json({ success: true, data: result });
-  } catch (error) {
-    return next(error);
-  }
-});
+    res.status(201).json({ success: true, data: await accountService.transfer(currentUser(req), payload) });
+  }),
+);
 
 export { router as transferRouter };

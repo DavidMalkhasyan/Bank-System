@@ -10,8 +10,9 @@ export class AppError extends Error {
   }
 }
 
-export const notFound = (message: string) => new AppError(message, 404);
 export const badRequest = (message: string, publicDetails?: Record<string, unknown>) =>
   new AppError(message, 400, publicDetails);
 export const unauthorized = (message = 'Authentication required') => new AppError(message, 401);
 export const forbidden = (message = 'Forbidden') => new AppError(message, 403);
+export const notFound = (message: string) => new AppError(message, 404);
+export const conflict = (message: string) => new AppError(message, 409);

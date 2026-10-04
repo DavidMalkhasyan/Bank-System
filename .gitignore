@@ -11,3 +11,4 @@ postgres-data
 redis-data
 
 frontend/tsconfig.tsbuildinfo
+.runtime

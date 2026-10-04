@@ -1,218 +1,205 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useState, type FormEvent } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Minus, MoreHorizontal, Pencil, Plus, Send, XCircle } from 'lucide-react';
 
-import Sidebar from '../components/Sidebar';
-import { api } from '../services/api';
-import { formatCurrency, formatDateTime, formatTransactionType, maskAccountId } from '../utils/format';
-
-interface AccountRecord {
-  id: string;
-  user_id: string;
-  currency: 'USD' | 'EUR' | 'AMD';
-  balance: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface TransactionRecord {
-  id: string;
-  type: 'DEPOSIT' | 'WITHDRAWAL' | 'TRANSFER';
-  amount: string;
-  currency: string;
-  status: string;
-  created_at: string;
-  metadata: Record<string, unknown> | null;
-}
+import { AccountCard } from '../components/AccountCard';
+import { useActions } from '../components/AppLayout';
+import { Modal } from '../components/Modal';
+import { useToast } from '../components/Toast';
+import { TransactionList } from '../components/TransactionList';
+import { Alert, Button, Card, CardHeader, CopyButton, EmptyState, Field, Input, Menu, PageHeader, Pagination, Skeleton, StatusBadge } from '../components/ui';
+import { ApiError, errorMessage } from '../lib/api';
+import { formatAccountNumber, formatDate } from '../lib/format';
+import { useAccount, useCloseAccount, useRenameAccount, useTransactions } from '../lib/queries';
 
 export default function AccountDetailsPage() {
-  const { id } = useParams();
-  const [account, setAccount] = useState<AccountRecord | null>(null);
-  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [depositAmount, setDepositAmount] = useState('');
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [submitting, setSubmitting] = useState<'deposit' | 'withdraw' | null>(null);
+  const { id = '' } = useParams();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const actions = useActions();
+  const account = useAccount(id);
+  const [page, setPage] = useState(1);
+  const transactions = useTransactions({ accountId: id, page, pageSize: 10 });
+  const rename = useRenameAccount();
+  const close = useCloseAccount();
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [name, setName] = useState('');
 
-  const loadData = async () => {
-    if (!id) return;
+  const back = (
+    <Link to="/app/accounts" className="back-link">
+      <ArrowLeft /> Accounts
+    </Link>
+  );
 
-    try {
-      setLoading(true);
-      const [accountData, txData] = await Promise.all([
-        api.request<AccountRecord>(`/accounts/${id}`),
-        api.request<TransactionRecord[]>(`/transactions?accountId=${id}&page=1&pageSize=10`),
-      ]);
+  if (account.isError) {
+    const notFound = account.error instanceof ApiError && account.error.status === 404;
+    return (
+      <>
+        <PageHeader title="Account" back={back} />
+        <Card>
+          <EmptyState title={notFound ? 'Account not found' : 'Could not load this account'} action={<Link to="/app/accounts" className="btn btn-secondary">Back to accounts</Link>}>
+            {notFound ? 'It may have been removed, or it belongs to someone else.' : errorMessage(account.error)}
+          </EmptyState>
+        </Card>
+      </>
+    );
+  }
 
-      setAccount(accountData);
-      setTransactions(txData ?? []);
-      setError('');
-    } catch (err) {
-      setError((err as Error).message || 'Unable to load account data.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const data = account.data;
+  const isActive = data?.status === 'ACTIVE';
 
-  useEffect(() => {
-    void loadData();
-  }, [id]);
-
-  const handleDeposit = async (event: FormEvent) => {
+  const submitRename = async (event: FormEvent) => {
     event.preventDefault();
-    if (!id || !depositAmount) return;
-
-    setSubmitting('deposit');
-    setSuccess('');
-    setError('');
-
     try {
-      await api.request(`/accounts/${id}/deposit`, {
-        method: 'POST',
-        body: JSON.stringify({ amount: depositAmount }),
-      });
-      setDepositAmount('');
-      setSuccess('Deposit processed successfully.');
-      await loadData();
-    } catch (err) {
-      setError((err as Error).message || 'Deposit failed.');
-    } finally {
-      setSubmitting(null);
+      await rename.mutateAsync({ id, name });
+      toast.success('Account renamed');
+      setRenameOpen(false);
+    } catch {
+      // Shown in dialog.
     }
   };
 
-  const handleWithdraw = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!id || !withdrawAmount) return;
-
-    setSubmitting('withdraw');
-    setSuccess('');
-    setError('');
-
+  const confirmClose = async () => {
     try {
-      await api.request(`/accounts/${id}/withdraw`, {
-        method: 'POST',
-        body: JSON.stringify({ amount: withdrawAmount }),
-      });
-      setWithdrawAmount('');
-      setSuccess('Withdrawal processed successfully.');
-      await loadData();
-    } catch (err) {
-      setError((err as Error).message || 'Withdrawal failed.');
-    } finally {
-      setSubmitting(null);
+      await close.mutateAsync(id);
+      toast.success('Account closed');
+      setCloseOpen(false);
+      navigate('/app/accounts');
+    } catch {
+      // Shown in dialog.
     }
   };
-
-  const totalTransactions = useMemo(() => transactions.length, [transactions]);
 
   return (
-    <div className="page-shell">
-      <Sidebar />
-      <main className="content-panel">
-        <div className="card hero-card">
-          <p className="eyebrow">Account details</p>
-          <h1>{account ? `${account.currency} account` : 'Account'}</h1>
+    <>
+      <PageHeader
+        back={back}
+        title={data ? data.name : <Skeleton width={220} height={30} />}
+        subtitle={data && `${data.type === 'SAVINGS' ? 'Savings' : 'Checking'} account · ${data.currency}`}
+        actions={
+          data && (
+            <>
+              <Button variant="secondary" icon={<Plus />} disabled={!isActive} onClick={() => actions.openDeposit(id)}>
+                Deposit
+              </Button>
+              <Button variant="secondary" icon={<Minus />} disabled={!isActive} onClick={() => actions.openWithdraw(id)}>
+                Withdraw
+              </Button>
+              <Button icon={<Send />} disabled={!isActive} onClick={() => navigate(`/app/transfer?from=${id}`)}>
+                Transfer
+              </Button>
+              <Menu trigger={(props) => <Button variant="secondary" icon={<MoreHorizontal />} aria-label="More actions" {...props} />}>
+                {(closeMenu) => (
+                  <>
+                    <button type="button" className="menu-item" onClick={() => { closeMenu(); setName(data.name); rename.reset(); setRenameOpen(true); }}>
+                      <Pencil /> Rename
+                    </button>
+                    {data.status !== 'CLOSED' && (
+                      <button type="button" className="menu-item danger" onClick={() => { closeMenu(); close.reset(); setCloseOpen(true); }}>
+                        <XCircle /> Close account
+                      </button>
+                    )}
+                  </>
+                )}
+              </Menu>
+            </>
+          )
+        }
+      />
+
+      {data?.status === 'FROZEN' && (
+        <div style={{ marginBottom: 20 }}>
+          <Alert tone="info">This account is frozen by our security team. Deposits, withdrawals and transfers are paused.</Alert>
         </div>
+      )}
 
-        {error && <div className="error-box">{error}</div>}
-        {success && <div className="success-box">{success}</div>}
+      <div className="grid grid-main" style={{ alignItems: 'start' }}>
+        <Card>
+          <CardHeader title="Activity" subtitle="Everything that moved in or out of this account." />
+          <div style={{ padding: '6px 0 0' }}>
+            {transactions.data?.items.length === 0 ? (
+              <EmptyState title="No activity yet">Make a deposit to get started.</EmptyState>
+            ) : (
+              <TransactionList transactions={transactions.data?.items} loading={transactions.isLoading} />
+            )}
+          </div>
+          {transactions.data && transactions.data.meta.totalPages > 1 && (
+            <Pagination page={page} totalPages={transactions.data.meta.totalPages} total={transactions.data.meta.total} onPage={setPage} noun="transactions" />
+          )}
+        </Card>
 
-        {loading ? (
-          <div className="card info-card">Loading account details...</div>
-        ) : !account ? (
-          <div className="card info-card">Account not found.</div>
-        ) : (
-          <>
-            <div className="card section-card">
-              <div className="account-overview">
+        <div className="stack">
+          {data ? <AccountCard account={data} link={false} showFullNumber /> : <Skeleton height={190} radius={20} />}
+          <Card className="card-pad">
+            {data ? (
+              <div className="detail-list" style={{ gridTemplateColumns: '1fr' }}>
                 <div>
-                  <span className="eyebrow">Account ID</span>
-                  <h2>{maskAccountId(account.id)}</h2>
+                  <div className="detail-label">Account number</div>
+                  <div className="detail-value num">
+                    {formatAccountNumber(data.accountNumber)}
+                    <CopyButton value={data.accountNumber} label="Copy account number" />
+                  </div>
+                  <div className="field-hint">Share it to receive transfers from other Ledgerly customers.</div>
                 </div>
-                <span className={`status-badge ${account.status.toLowerCase()}`}>{account.status}</span>
-              </div>
-
-              <div className="stats-grid compact-grid">
-                <div className="card stat-card">
-                  <span>Balance</span>
-                  <strong>{formatCurrency(account.balance, account.currency)}</strong>
+                <div>
+                  <div className="detail-label">Status</div>
+                  <div className="detail-value"><StatusBadge status={data.status} /></div>
                 </div>
-                <div className="card stat-card">
-                  <span>Currency</span>
-                  <strong>{account.currency}</strong>
+                <div>
+                  <div className="detail-label">Opened</div>
+                  <div className="detail-value">{formatDate(data.createdAt)}</div>
                 </div>
-                <div className="card stat-card">
-                  <span>Transactions</span>
-                  <strong>{totalTransactions}</strong>
-                </div>
+                {data.closedAt && (
+                  <div>
+                    <div className="detail-label">Closed</div>
+                    <div className="detail-value">{formatDate(data.closedAt)}</div>
+                  </div>
+                )}
               </div>
-            </div>
-
-            <div className="two-col">
-              <div className="card section-card">
-                <div className="section-header"><h2>Deposit</h2></div>
-                <form onSubmit={handleDeposit} className="stack-form">
-                  <label>
-                    Amount
-                    <input type="number" step="0.01" min="0.01" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} placeholder="100.00" required />
-                  </label>
-                  <button type="submit" disabled={submitting === 'deposit'}>{submitting === 'deposit' ? 'Processing...' : 'Deposit'}</button>
-                </form>
+            ) : (
+              <div className="stack">
+                <Skeleton height={40} />
+                <Skeleton height={40} />
               </div>
+            )}
+          </Card>
+        </div>
+      </div>
 
-              <div className="card section-card">
-                <div className="section-header"><h2>Withdraw</h2></div>
-                <form onSubmit={handleWithdraw} className="stack-form">
-                  <label>
-                    Amount
-                    <input type="number" step="0.01" min="0.01" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} placeholder="100.00" required />
-                  </label>
-                  <button type="submit" disabled={submitting === 'withdraw'}>{submitting === 'withdraw' ? 'Processing...' : 'Withdraw'}</button>
-                </form>
-              </div>
-            </div>
-
-            <div className="card section-card">
-              <div className="section-header">
-                <h2>Recent transactions</h2>
-                <Link to="/transfer">Transfer funds</Link>
-              </div>
-
-              {transactions.length === 0 ? (
-                <p className="empty-text">No activity on this account yet.</p>
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Details</th>
-                        <th>Date</th>
-                        <th>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {transactions.map((transaction) => (
-                        <tr key={transaction.id}>
-                          <td>{formatTransactionType(transaction.type)}</td>
-                          <td>{typeof transaction.metadata?.description === 'string' ? transaction.metadata.description : 'Account activity'}</td>
-                          <td>{formatDateTime(transaction.created_at)}</td>
-                          <td className={Number.parseFloat(transaction.amount) >= 0 ? 'positive' : 'negative'}>
-                            {formatCurrency(transaction.amount, transaction.currency)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+      <Modal
+        open={renameOpen}
+        onClose={() => setRenameOpen(false)}
+        title="Rename account"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRenameOpen(false)}>Cancel</Button>
+            <Button type="submit" form="rename-form" loading={rename.isPending} disabled={!name.trim()}>Save</Button>
           </>
-        )}
-      </main>
-    </div>
+        }
+      >
+        <form id="rename-form" onSubmit={submitRename} className="stack">
+          {rename.isError && <Alert>{errorMessage(rename.error)}</Alert>}
+          <Field label="Account name" htmlFor="account-name">
+            <Input id="account-name" value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
+          </Field>
+        </form>
+      </Modal>
+
+      <Modal
+        open={closeOpen}
+        onClose={() => setCloseOpen(false)}
+        title="Close this account?"
+        description="Closed accounts can’t receive or send money. Your history stays available."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCloseOpen(false)}>Keep account</Button>
+            <Button variant="danger" loading={close.isPending} onClick={confirmClose}>Close account</Button>
+          </>
+        }
+      >
+        {close.isError ? <Alert>{errorMessage(close.error)}</Alert> : <p className="muted">The balance must be zero before an account can be closed.</p>}
+      </Modal>
+    </>
   );
 }

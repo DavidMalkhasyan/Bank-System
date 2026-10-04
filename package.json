@@ -1,5 +1,5 @@
 {
-  "name": "banking-system",
+  "name": "ledgerly",
   "private": true,
   "workspaces": [
     "frontend",
@@ -7,11 +7,17 @@
   ],
   "scripts": {
     "dev": "docker compose up --build",
-    "dev:frontend": "npm --workspace frontend run dev",
     "dev:backend": "npm --workspace backend run dev",
+    "dev:frontend": "npm --workspace frontend run dev",
     "build": "npm --workspace frontend run build && npm --workspace backend run build",
-    "test": "npm --workspace backend run test -- --runInBand",
+    "start": "npm --workspace backend run start",
+    "test": "npm --workspace backend run test",
     "lint": "npm --workspace frontend run lint && npm --workspace backend run lint",
-    "typecheck": "npm --workspace frontend run typecheck && npm --workspace backend run typecheck"
+    "typecheck": "npm --workspace frontend run typecheck && npm --workspace backend run typecheck",
+    "seed": "npm --workspace backend run seed",
+    "seed:reset": "npm --workspace backend run seed:reset"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

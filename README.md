@@ -1,251 +1,204 @@
-# Banking System Portfolio Project
+# Ledgerly — full-stack digital banking
 
-## Overview
+Ledgerly is a complete banking web app: multi-currency accounts, instant transfers between customers, cash flow analytics, and a back office for administrators. It is built with **React + TypeScript** on the front end and **Node.js, Express and PostgreSQL** on the back end.
 
-This project is a full-stack banking system designed as a portfolio and interview-ready application. It aims to demonstrate practical backend engineering skill, correct financial logic, concurrency handling, secure authentication, and a clean full-stack architecture.
+The focus is on financial correctness: money is never stored as floating point, every transfer is atomic, and concurrent requests can never overdraw an account. Integration tests against a real database prove all three.
 
-This is not a real production banking system and should not be treated as such. It is intentionally built as a realistic engineering exercise.
+![Ledgerly dashboard](docs/screenshots/dashboard.png)
+
+> This is a portfolio project. No real money is involved.
+
+## Try it
+
+After starting the app (see [Run it locally](#run-it-locally)), open it and click **Try the live demo**, or sign in with one of these accounts:
+
+| Role     | Email               | Password      | What to look at                                 |
+| -------- | ------------------- | ------------- | ----------------------------------------------- |
+| Customer | `alex@example.com`  | `password123` | 3 accounts and 4 months of realistic history    |
+| Customer | `sam@example.com`   | `password123` | USD and AMD accounts; sends money to Alex       |
+| Admin    | `admin@example.com` | `password123` | Back office: metrics, freezing, audit log       |
+
+New sign-ups get a checking account with $1,000 of demo money, so transfers can be tried right away.
 
 ## Features
 
-- User registration, login, refresh, logout
-- JWT authentication with bcrypt password hashing
-- Role-based access control for customers and administrators
-- Multiple accounts per user with currency support
-- Deposits and withdrawals with validation
-- Account-to-account transfers with PostgreSQL transactions
-- Transaction history with filtering and pagination
-- Redis cache-aside for account reads
-- Audit log tracking for important events
-- Admin dashboards for users, accounts, transactions, and audit logs
-- Docker Compose setup for local development
-- Environment-variable-based configuration for deployment
+**For customers**
+- Dashboard with total balance per currency, 30-day money in / money out, and a balance history chart
+- Checking and savings accounts in USD, EUR and AMD, each with a 16-digit account number
+- Send money to your own accounts or to anyone by account number, with a live recipient lookup ("Sam L.")
+- Deposits and withdrawals (simulated cash), with overdraft protection
+- Activity feed grouped by day, with search, filters by type, account and date range, receipts, and CSV export
+- Rename or close accounts, edit your profile, change your password (signs out other sessions)
+- Light and dark mode, and a responsive layout down to phone width
 
-## Architecture
+**For administrators**
+- Platform metrics: customers, accounts, 14-day transaction volume, and deposits held per currency
+- Search every customer, account and transaction; promote or demote admins
+- Freeze and unfreeze accounts with a reason; frozen accounts can't move money
+- An append-only audit log of sign-ins, failed sign-ins, money movement and admin actions
 
-```mermaid
-flowchart LR
-    Browser[Browser\nReact + Vite] --> Frontend[Frontend\nReact + Redux + Router]
-    Frontend --> API[Express API\nTypeScript]
-    API --> Postgres[(PostgreSQL)]
-    API --> Redis[(Redis)]
-```
+| | |
+| --- | --- |
+| ![Landing page](docs/screenshots/landing.png) | ![Send money](docs/screenshots/transfer.png) |
+| ![Dark mode activity](docs/screenshots/activity-dark.png) | ![Admin overview](docs/screenshots/admin.png) |
 
-## Technology Stack
+## Engineering highlights
 
-### Frontend
-- React
-- TypeScript
-- Vite
-- Redux Toolkit
-- React Router
+**Exact money.** Balances are `NUMERIC(18,2)` in PostgreSQL and integer cents in JavaScript ([`utils/money.ts`](backend/src/utils/money.ts)). Balance updates run in SQL (`balance = balance + $1`), so `0.10 + 0.20` is always `0.30`.
 
-### Backend
-- Node.js
-- Express
-- TypeScript
-- PostgreSQL
-- Redis
-- JWT
-- bcrypt
-- zod or express-validator style validation
-
-### Infrastructure
-- Docker
-- Docker Compose
-- git-based CI workflow
-
-## Database Schema
-
-```mermaid
-erDiagram
-    users ||--o{ accounts : owns
-    users ||--o{ refresh_tokens : has
-    users ||--o{ audit_logs : creates
-    accounts ||--o{ transactions : records
-
-    users {
-      uuid id PK
-      string email UK
-      string password_hash
-      role role
-      timestamptz created_at
-      timestamptz updated_at
-    }
-
-    accounts {
-      uuid id PK
-      uuid user_id FK
-      string currency
-      numeric balance
-      string status
-      timestamptz created_at
-      timestamptz updated_at
-    }
-
-    transactions {
-      uuid id PK
-      uuid account_id FK
-      uuid source_account_id FK
-      uuid destination_account_id FK
-      numeric amount
-      string currency
-      string type
-      string status
-      json metadata
-      timestamptz created_at
-    }
-
-    refresh_tokens {
-      uuid id PK
-      uuid user_id FK
-      string token_hash
-      timestamptz expires_at
-      timestamptz created_at
-    }
-
-    audit_logs {
-      uuid id PK
-      uuid user_id FK
-      string action
-      string entity_type
-      uuid entity_id
-      json metadata
-      timestamptz created_at
-    }
-```
-
-## API Structure
-
-### Auth
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `POST /auth/logout`
-
-### Accounts
-- `GET /accounts`
-- `GET /accounts/:id`
-- `POST /accounts`
-- `GET /accounts/:id/balance`
-- `POST /accounts/:id/deposit`
-- `POST /accounts/:id/withdraw`
-
-### Transfers
-- `POST /transfers`
-
-### Admin
-- `GET /admin/users`
-- `GET /admin/accounts`
-- `GET /admin/transactions`
-- `GET /admin/audit-logs`
-
-## Authentication Flow
-
-1. User registers with email and password.
-2. Password is hashed with bcrypt.
-3. Backend issues an access token and refresh token.
-4. Access token is used for protected requests.
-5. Refresh token is used to obtain a new access token.
-6. Logout invalidates the refresh token and clears session state.
-
-## Transfer Transaction Flow
+**Atomic, concurrency-safe transfers.** A transfer runs in one database transaction ([`accountService.transfer`](backend/src/services/accountService.ts)):
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant API as Express API
     participant DB as PostgreSQL
-    C->>API: POST /transfers
+    C->>API: POST /api/transfers
     API->>DB: BEGIN
-    API->>DB: SELECT source account FOR UPDATE
-    API->>DB: SELECT destination account FOR UPDATE
-    API->>DB: Validate amount and balances
-    API->>DB: UPDATE source balance
-    API->>DB: UPDATE destination balance
-    API->>DB: INSERT transaction row
+    API->>DB: SELECT both accounts FOR UPDATE (ordered by id)
+    API->>DB: check ownership, status, currency, balance
+    API->>DB: UPDATE source / destination balances
+    API->>DB: INSERT transaction + audit log row
     API->>DB: COMMIT
-    DB-->>API: Success
-    API-->>C: 201 Created
+    API-->>C: 201 Created + receipt
 ```
 
-## Concurrency Handling
+- Row locks (`SELECT … FOR UPDATE`) make concurrent transfers queue up instead of reading stale balances. A test fires 12 parallel $100 transfers at a $1,000 account: exactly 10 succeed and the balance ends at $0.00.
+- Both rows are always locked in id order, so two customers sending to each other at the same moment can't deadlock. This is also tested.
+- The audit row is written with the same database client, so it commits or rolls back together with the money.
 
-The banking transfer flow relies on PostgreSQL row-level locking via `SELECT ... FOR UPDATE` for the source and destination accounts before any balance update. This prevents race conditions where two concurrent withdrawals or transfers observe stale balances.
+**Secure sessions.**
+- Access tokens are 15-minute JWTs, pinned to the HS256 algorithm.
+- Refresh tokens are random 384-bit strings; only their SHA-256 digest is stored.
+- Refresh tokens rotate on every use. Reusing an old token revokes every session of that user.
+- Passwords are hashed with bcrypt, and sign-in takes the same time whether or not the email exists.
+- Sign-in is rate limited, and Helmet sets security headers.
+- On the client, parallel requests that hit an expired token wait for a single shared refresh ([`lib/api.ts`](frontend/src/lib/api.ts)).
 
-Locking order is kept consistent for cross-account operations to reduce deadlock risk. The transfer logic must never perform a transfer without a single database transaction.
+**Privacy by default.**
+- Customers asking for another customer's account get a 404, not a 403, so account ids don't leak.
+- Transfers show the counterparty's name and only the last four digits of their account number.
+- Admin endpoints never return password hashes.
 
-## Redis Caching Strategy
+**Analytics in SQL.** The cash flow chart uses one `generate_series` query for daily income and expense. Internal moves between a customer's own accounts are excluded. The balance history is rebuilt backwards from today's balance ([`transactionRepository.cashflow`](backend/src/repositories/transactionRepository.ts)).
 
-- Cache account details and balances with TTL
-- Use a cache-aside pattern: check Redis first, fallback to Postgres, then populate cache
-- Invalidate or refresh cache after deposit, withdrawal, transfer, and account updates
-- Redis is optional for the application to function; the app must degrade gracefully when it is unavailable
+**Operational details.**
+- Versioned migrations run on startup under a Postgres advisory lock.
+- Validation errors from Zod become readable `400` responses with per-field errors.
+- Redis caches account reads (cache-aside) and is optional: the app runs fine without it.
+- The server shuts down gracefully, and `/health` checks the database.
 
-## Docker Setup
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser["React 18 + Vite<br/>Redux Toolkit (session)<br/>TanStack Query (server state)"] -->|/api| API["Express + TypeScript<br/>routes → services → repositories"]
+    API --> PG[(PostgreSQL)]
+    API -. optional cache .-> Redis[(Redis)]
+```
+
+```
+backend/src
+├── routes/         HTTP layer: Zod validation, response envelopes
+├── services/       business rules: auth, money movement, admin
+├── repositories/   SQL, one file per table, DTO mapping
+├── db/             pool, migrations, demo data seed, Redis
+├── middleware/     auth (JWT, roles), error handling
+└── tests/          integration tests (Vitest + Supertest + real PostgreSQL)
+
+frontend/src
+├── pages/          routes, including admin/ (lazy loaded)
+├── components/     design system (ui.tsx, Modal, Toast) and banking widgets
+├── lib/            API client with token refresh, queries, formatting
+└── styles/         CSS variables, light and dark themes
+```
+
+### Data model
+
+```mermaid
+erDiagram
+    users ||--o{ accounts : owns
+    users ||--o{ refresh_tokens : has
+    users ||--o{ audit_logs : performs
+    accounts ||--o{ transactions : "source / destination"
+
+    users { uuid id PK
+      string email UK
+      string full_name
+      string password_hash
+      string role }
+    accounts { uuid id PK
+      uuid user_id FK
+      string account_number UK
+      string name
+      string type
+      string currency
+      numeric balance
+      string status }
+    transactions { uuid id PK
+      uuid source_account_id FK
+      uuid destination_account_id FK
+      numeric amount
+      string currency
+      string type
+      string description
+      timestamptz created_at }
+```
+
+## API
+
+All endpoints live under `/api`. They return `{ success, data }`, and list endpoints add `meta: { page, pageSize, total, totalPages }`.
+
+| Area         | Endpoints |
+| ------------ | --------- |
+| Auth         | `POST /auth/register` · `POST /auth/login` · `POST /auth/refresh` · `POST /auth/logout` · `GET/PATCH /auth/me` · `POST /auth/change-password` |
+| Accounts     | `GET/POST /accounts` · `GET/PATCH /accounts/:id` · `POST /accounts/:id/deposit` · `POST /accounts/:id/withdraw` · `POST /accounts/:id/close` · `GET /accounts/lookup?number=` |
+| Transfers    | `POST /transfers` (to `destinationAccountId` or `destinationAccountNumber`) |
+| Transactions | `GET /transactions?type&accountId&search&from&to&page` · `GET /transactions/:id` · `GET /transactions/cashflow?currency&days` |
+| Admin        | `GET /admin/stats` · `GET /admin/users` · `PATCH /admin/users/:id/role` · `GET /admin/accounts` · `PATCH /admin/accounts/:id/status` · `GET /admin/transactions` · `GET /admin/audit-logs` |
+
+## Run it locally
+
+### With Docker (recommended)
 
 ```bash
 docker compose up --build
 ```
 
-This starts:
-- frontend on `http://localhost:5173`
-- backend on `http://localhost:4000`
-- PostgreSQL on `localhost:15432`
-- Redis on `localhost:6380`
+Then open http://localhost:5173. PostgreSQL, Redis, the API (hot reload) and the Vite dev server all start; migrations run and demo data is seeded automatically.
 
-## Environment Variables
+### Without Docker
 
-See `.env.example` for the required values.
+You need Node.js 20+ and PostgreSQL 13+.
 
-## Testing
+```bash
+npm install
+cp .env.example backend/.env      # then set DATABASE_URL
+npm run dev:backend               # API on http://localhost:4000 (migrates + seeds on start)
+npm run dev:frontend              # app on http://localhost:5173, proxies /api to the API
+```
 
-The project includes automated tests covering:
-- registration
-- login
-- authorization
-- account creation
-- deposit
-- withdraw
-- transfer
-- insufficient balance
-- same-account transfer
-- currency mismatch
-- concurrent operations
-- rollback behavior
+Useful scripts:
 
-## Deployment
+```bash
+npm test             # integration tests (set TEST_DATABASE_URL to an empty database)
+npm run lint
+npm run typecheck
+npm run build
+npm run seed:reset   # wipe the database and load the demo data again
+```
 
-This project is designed for environment-variable-based deployment. A typical free-tier design is:
+## Deploy
 
-- Frontend: Vercel
-- Backend: Render
-- PostgreSQL: Neon or Supabase
-- Redis: Upstash
+The root [`Dockerfile`](Dockerfile) builds a single production image: the API also serves the compiled React app, so one service and one database are all you need.
 
-Implementation does not hardcode provider-specific assumptions.
+- **Render:** [`render.yaml`](render.yaml) is a blueprint for a free web service and a free PostgreSQL database. Push to GitHub, choose *New → Blueprint* in Render, and pick this repository. JWT secrets are generated for you, and the demo data resets every 24 hours.
+- **Anywhere else:** run the image with `DATABASE_URL` and `JWT_ACCESS_SECRET` set. Add `DATABASE_SSL=true` for hosted databases such as Neon or Supabase. See [`.env.example`](.env.example) for every option.
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint, type checks, the integration tests against PostgreSQL, and the production build on every push.
 
 ## Limitations
 
-- This is a portfolio demo, not a bank-grade production system.
-- Currency conversion is not implemented.
-- Real financial compliance, fraud detection, and audit-depth controls are intentionally out of scope.
-
-## Future Improvements
-
-- Multi-currency accounts with FX conversion
-- Transaction notifications
-- WebSocket activity feed
-- Better admin analytics
-- SSO and MFA
-- Advanced fraud monitoring
-
-## Local Development
-
-1. Copy `.env.example` to `.env`
-2. Run `docker compose up --build`
-3. Access the app at `http://localhost:5173`
-
-## Notes
-
-The codebase has been intentionally kept understandable and production-like without overengineering. The primary goal is correctness, security, and interview-friendly architecture.
+- Deposits and withdrawals are simulated; there is no card network or payment provider.
+- Currency exchange isn't supported, so transfers require matching currencies.
+- There's no email verification, 2FA or fraud scoring. These would be next on the list.
